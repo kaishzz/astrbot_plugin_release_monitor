@@ -1,10 +1,11 @@
+import asyncio
 import importlib
 import sys
 import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 
 DATA_ROOT = Path(tempfile.mkdtemp(prefix="release-monitor-tests-"))
@@ -151,6 +152,19 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
         restored = self.make_plugin(repositories=["owner/repo"])
         await restored.load_state()
         self.assertEqual(restored.state["owner/repo"]["tag_name"], "v2.0.0")
+
+    async def test_initialize_schedules_initial_check_in_background(self):
+        plugin = self.make_plugin(
+            repositories=[{"repo": "owner/repo", "include_prereleases": False}]
+        )
+        plugin.check_releases = AsyncMock()
+
+        await plugin.initialize()
+        plugin.check_releases.assert_not_awaited()
+
+        await asyncio.sleep(0)
+        plugin.check_releases.assert_awaited_once()
+        await plugin.terminate()
 
     def test_write_json_uses_expected_path(self):
         plugin = self.make_plugin()

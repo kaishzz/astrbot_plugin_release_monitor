@@ -279,7 +279,7 @@ class ReleaseMonitorPlugin(Star):
                     if is_new or (first_run and self.notify_on_first_run):
                         sent = await self.notify(repo, release)
                         changes.append(
-                            f"{repo}: {release.get('tag_name', key)}（已发送 {sent} 个渠道）"
+                            f"{repo}: {release.get('tag_name', key)} (已发送 {sent} 个渠道)"
                         )
                     elif first_run:
                         logger.info(
@@ -308,12 +308,13 @@ class ReleaseMonitorPlugin(Star):
     async def monitor_loop(self) -> None:
         try:
             while True:
+                try:
+                    await self.check_releases()
+                except Exception as exc:
+                    logger.error(f"Release 定时监控检查异常: {exc}")
                 await asyncio.sleep(self.interval_minutes * 60)
-                await self.check_releases()
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            logger.error(f"Release 定时监控任务异常: {exc}")
 
     async def initialize(self):
         await self.load_state()
@@ -322,7 +323,6 @@ class ReleaseMonitorPlugin(Star):
             return
         if not self.gotify_channels:
             logger.warning("Release Monitor 未配置有效的 Gotify 渠道")
-        await self.check_releases()
         self.monitor_task = asyncio.create_task(self.monitor_loop())
         logger.info(
             f"Release Monitor 已启动, 监控 {len(self.repositories)} 个仓库, "
@@ -348,7 +348,7 @@ class ReleaseMonitorPlugin(Star):
         if not self.repositories:
             yield event.plain_result("当前没有配置监控仓库")
             return
-        lines = [f"当前监控仓库（{len(self.repositories)} 个）："]
+        lines = [f"当前监控仓库 ({len(self.repositories)} 个): "]
         for repository in self.repositories:
             repo = repository["repo"]
             item = self.state.get(repo, {})
@@ -364,10 +364,10 @@ class ReleaseMonitorPlugin(Star):
         checked = self.last_check_at or "尚未检查"
         running = self.monitor_task and not self.monitor_task.done()
         yield event.plain_result(
-            f"监控状态：{'运行中' if running else '未运行'}\n"
-            f"仓库数量：{len(self.repositories)}\n"
-            f"Gotify 渠道：{len(self.gotify_channels)}\n"
-            f"最后检查：{checked}"
+            f"监控状态: {'运行中' if running else '未运行'}\n"
+            f"仓库数量: {len(self.repositories)}\n"
+            f"Gotify 渠道: {len(self.gotify_channels)}\n"
+            f"最后检查: {checked}"
         )
 
     async def terminate(self):
