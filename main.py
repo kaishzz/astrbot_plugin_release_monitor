@@ -30,12 +30,14 @@ class ReleaseMonitorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.repositories = self.parse_repositories(config.get("repositories", []))
+        self.repositories = self.parse_repositories(
+            config.get("repositories", []),
+            default_include_prereleases=self.read_bool("include_prereleases", False),
+        )
         self.github_token = self.normalize_text(config.get("github_token"))
         self.interval_minutes = self.read_int(
             "check_interval_minutes", self.DEFAULT_INTERVAL_MINUTES, minimum=1
         )
-        self.include_prereleases = self.read_bool("include_prereleases", False)
         self.notify_on_first_run = self.read_bool("notify_on_first_run", False)
         self.gotify_channels = self.parse_gotify_channels(
             config.get("gotify_channels", [])
@@ -51,7 +53,9 @@ class ReleaseMonitorPlugin(Star):
         return value.strip() if isinstance(value, str) else ""
 
     @classmethod
-    def parse_repositories(cls, value: Any) -> List[str]:
+    def parse_repositories(
+        cls, value: Any, default_include_prereleases: bool = False
+    ) -> List[Dict[str, Any]]:
         if isinstance(value, str):
             values = value.replace(",", "\n").splitlines()
         elif isinstance(value, list):
@@ -59,19 +63,43 @@ class ReleaseMonitorPlugin(Star):
         else:
             values = []
 
-        result: List[str] = []
+        result: List[Dict[str, Any]] = []
         seen = set()
         for item in values:
-            repo = cls.normalize_text(item).strip("/")
+            if isinstance(item, dict):
+                raw_repo = item.get("repo") or item.get("repository")
+                include_prereleases = cls.parse_bool(
+                    item.get("include_prereleases"), default_include_prereleases
+                )
+            else:
+                raw_repo = item
+                include_prereleases = default_include_prereleases
+
+            repo = cls.normalize_text(raw_repo).strip("/")
             if repo.startswith("https://github.com/"):
                 repo = repo.removeprefix("https://github.com/").split("/releases", 1)[0]
             if repo.count("/") != 1 or repo in seen:
                 continue
             owner, name = repo.split("/", 1)
             if owner and name and all(part not in {".", ".."} for part in (owner, name)):
-                result.append(repo)
+                result.append(
+                    {
+                        "repo": repo,
+                        "include_prereleases": include_prereleases,
+                    }
+                )
                 seen.add(repo)
         return result
+
+    @staticmethod
+    def parse_bool(value: Any, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"1", "true", "yes", "on"}
+        return bool(value)
 
     @classmethod
     def parse_gotify_channels(cls, value: Any) -> List[Dict[str, Any]]:
@@ -116,12 +144,7 @@ class ReleaseMonitorPlugin(Star):
         return max(minimum, value)
 
     def read_bool(self, key: str, default: bool) -> bool:
-        value = self.config.get(key, default)
-        if isinstance(value, bool):
-            return value
-        if isinstance(value, str):
-            return value.strip().lower() in {"1", "true", "yes", "on"}
-        return bool(value)
+        return self.parse_bool(self.config.get(key, default), default)
 
     def get_state_path(self) -> Path:
         plugin_name = getattr(self, "name", "astrbot_plugin_release_monitor")
@@ -168,8 +191,10 @@ class ReleaseMonitorPlugin(Star):
             headers["Authorization"] = f"Bearer {self.github_token}"
         return headers
 
-    def fetch_latest_release(self, repo: str) -> Optional[ReleaseInfo]:
-        if self.include_prereleases:
+    def fetch_latest_release(
+        self, repo: str, include_prereleases: bool = False
+    ) -> Optional[ReleaseInfo]:
+        if include_prereleases:
             url = f"https://api.github.com/repos/{quote(repo, safe='/')}/releases?per_page=20"
         else:
             url = f"https://api.github.com/repos/{quote(repo, safe='/')}/releases/latest"
@@ -227,9 +252,14 @@ class ReleaseMonitorPlugin(Star):
     async def check_releases(self) -> List[str]:
         async with self.check_lock:
             changes: List[str] = []
-            for repo in self.repositories:
+            for repository in self.repositories:
+                repo = repository["repo"]
                 try:
-                    release = await asyncio.to_thread(self.fetch_latest_release, repo)
+                    release = await asyncio.to_thread(
+                        self.fetch_latest_release,
+                        repo,
+                        repository["include_prereleases"],
+                    )
                     if not release:
                         logger.info(f"{repo} 当前没有可用 Release")
                         continue
@@ -306,9 +336,11 @@ class ReleaseMonitorPlugin(Star):
             yield event.plain_result("当前没有配置监控仓库")
             return
         lines = [f"当前监控仓库（{len(self.repositories)} 个）："]
-        for repo in self.repositories:
+        for repository in self.repositories:
+            repo = repository["repo"]
             item = self.state.get(repo, {})
-            lines.append(f"- {repo}: {item.get('tag_name', '尚未检查')}")
+            mode = "含预发布" if repository["include_prereleases"] else "正式版"
+            lines.append(f"- {repo} [{mode}]: {item.get('tag_name', '尚未检查')}")
         yield event.plain_result("\n".join(lines))
 
     @filter.command("release_status")

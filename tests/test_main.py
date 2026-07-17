@@ -81,9 +81,28 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
 
     def test_parse_repositories(self):
         result = main.ReleaseMonitorPlugin.parse_repositories(
-            ["owner/repo", "https://github.com/owner/other/releases", "bad", "owner/repo"]
+            [
+                {"repo": "owner/repo", "include_prereleases": True},
+                "https://github.com/owner/other/releases",
+                "bad",
+                "owner/repo",
+            ]
         )
-        self.assertEqual(result, ["owner/repo", "owner/other"])
+        self.assertEqual(
+            result,
+            [
+                {"repo": "owner/repo", "include_prereleases": True},
+                {"repo": "owner/other", "include_prereleases": False},
+            ],
+        )
+
+    def test_parse_repositories_supports_legacy_global_default(self):
+        result = main.ReleaseMonitorPlugin.parse_repositories(
+            ["owner/repo"], default_include_prereleases=True
+        )
+        self.assertEqual(
+            result, [{"repo": "owner/repo", "include_prereleases": True}]
+        )
 
     def test_parse_gotify_channels(self):
         result = main.ReleaseMonitorPlugin.parse_gotify_channels(
@@ -113,7 +132,7 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_state_is_persisted_and_new_release_is_notified_once(self):
         plugin = self.make_plugin(
-            repositories=["owner/repo"],
+            repositories=[{"repo": "owner/repo", "include_prereleases": False}],
             gotify_channels=[{"url": "https://gotify.example.com", "token": "abc"}],
             notify_on_first_run=False,
         )

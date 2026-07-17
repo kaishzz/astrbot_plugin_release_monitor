@@ -6,12 +6,26 @@
 
 ## 配置
 
-- `repositories`：仓库列表，例如 `owner/repo`。
+- `repositories`：GitHub 仓库列表。每个仓库包含 `repo` 和 `include_prereleases`，可以分别设置是否监控预发布版本。
 - `github_token`：可选的 GitHub Token，用于提高 API 请求额度。
 - `check_interval_minutes`：检查间隔，默认 30 分钟。
-- `include_prereleases`：是否包含 prerelease，默认关闭。
 - `notify_on_first_run`：首次运行是否通知当前版本，默认关闭。
 - `gotify_channels`：Gotify 渠道列表，每个渠道包含 `name`、`url`、`token`、`priority`。
+
+仓库配置示例：
+
+```json
+[
+  {
+    "repo": "owner/stable-project",
+    "include_prereleases": false
+  },
+  {
+    "repo": "owner/nightly-project",
+    "include_prereleases": true
+  }
+]
+```
 
 ## 管理命令
 
