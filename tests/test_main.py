@@ -1,4 +1,3 @@
-import asyncio
 import importlib
 import sys
 import tempfile
@@ -83,7 +82,10 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
         result = main.ReleaseMonitorPlugin.parse_repositories(
             [
                 {"repo": "owner/repo", "include_prereleases": True},
-                "https://github.com/owner/other/releases",
+                {
+                    "repo": "https://github.com/owner/other/releases",
+                    "include_prereleases": False,
+                },
                 "bad",
                 "owner/repo",
             ]
@@ -94,14 +96,6 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
                 {"repo": "owner/repo", "include_prereleases": True},
                 {"repo": "owner/other", "include_prereleases": False},
             ],
-        )
-
-    def test_parse_repositories_supports_legacy_global_default(self):
-        result = main.ReleaseMonitorPlugin.parse_repositories(
-            ["owner/repo"], default_include_prereleases=True
-        )
-        self.assertEqual(
-            result, [{"repo": "owner/repo", "include_prereleases": True}]
         )
 
     def test_parse_gotify_channels(self):
@@ -143,9 +137,10 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
             "published_at": "2026-01-01T00:00:00Z",
             "html_url": "https://github.com/owner/repo/releases/tag/v1.0.0",
         }
-        with patch.object(plugin, "fetch_latest_release", return_value=release), patch.object(
-            plugin, "notify", return_value=1
-        ) as notify:
+        with (
+            patch.object(plugin, "fetch_latest_release", return_value=release),
+            patch.object(plugin, "notify", return_value=1) as notify,
+        ):
             self.assertEqual(await plugin.check_releases(), [])
             release["id"] = 2
             release["tag_name"] = "v2.0.0"

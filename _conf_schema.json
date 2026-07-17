@@ -12,7 +12,7 @@
           "repo": {
             "description": "仓库",
             "type": "string",
-            "hint": "填写 owner/repo，也支持 GitHub 仓库地址"
+            "hint": "填写 owner/repo, 也支持 GitHub 仓库地址"
           },
           "include_prereleases": {
             "description": "包含预发布版本",
@@ -28,19 +28,13 @@
     "description": "GitHub Token",
     "type": "string",
     "default": "",
-    "hint": "可选。用于提高 GitHub API 请求额度"
+    "hint": "可选. 用于提高 GitHub API 请求额度"
   },
   "check_interval_minutes": {
-    "description": "检查间隔（分钟）",
+    "description": "检查间隔 (分钟)",
     "type": "int",
     "default": 30,
     "hint": "最小 1 分钟"
-  },
-  "include_prereleases": {
-    "description": "旧版全局预发布设置（迁移兼容）",
-    "type": "bool",
-    "default": false,
-    "invisible": true
   },
   "notify_on_first_run": {
     "description": "首次运行时通知当前版本",
@@ -51,7 +45,6 @@
     "description": "Gotify 通知渠道",
     "type": "template_list",
     "default": [],
-    "hint": "可配置多个 Gotify 服务",
     "templates": {
       "gotify": {
         "name": "Gotify",
@@ -63,17 +56,15 @@
             "default": "Gotify"
           },
           "url": {
-            "description": "Gotify 服务地址",
-            "type": "string",
-            "hint": "例如 https://gotify.example.com"
+            "description": "Gotify Url",
+            "type": "string"
           },
           "token": {
             "description": "Gotify App Token",
-            "type": "string",
-            "hint": "填写 Gotify 应用的 Token"
+            "type": "string"
           },
           "priority": {
-            "description": "消息优先级",
+            "description": "Priority",
             "type": "int",
             "default": 5
           }

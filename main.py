@@ -20,8 +20,8 @@ ReleaseInfo = Dict[str, Any]
 @register(
     "astrbot_plugin_release_monitor",
     "kaish",
-    "监控多个 GitHub 仓库的新 Release, 并通过 Gotify 通知",
-    "1.0",
+    "监控 GitHub 仓库 Release, 并通过 Gotify 通知",
+    "1.1",
 )
 class ReleaseMonitorPlugin(Star):
     STATE_FILENAME = "release_state.json"
@@ -30,10 +30,7 @@ class ReleaseMonitorPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
-        self.repositories = self.parse_repositories(
-            config.get("repositories", []),
-            default_include_prereleases=self.read_bool("include_prereleases", False),
-        )
+        self.repositories = self.parse_repositories(config.get("repositories", []))
         self.github_token = self.normalize_text(config.get("github_token"))
         self.interval_minutes = self.read_int(
             "check_interval_minutes", self.DEFAULT_INTERVAL_MINUTES, minimum=1
@@ -53,35 +50,29 @@ class ReleaseMonitorPlugin(Star):
         return value.strip() if isinstance(value, str) else ""
 
     @classmethod
-    def parse_repositories(
-        cls, value: Any, default_include_prereleases: bool = False
-    ) -> List[Dict[str, Any]]:
-        if isinstance(value, str):
-            values = value.replace(",", "\n").splitlines()
-        elif isinstance(value, list):
-            values = value
-        else:
-            values = []
+    def parse_repositories(cls, value: Any) -> List[Dict[str, Any]]:
+        if not isinstance(value, list):
+            return []
 
         result: List[Dict[str, Any]] = []
         seen = set()
-        for item in values:
-            if isinstance(item, dict):
-                raw_repo = item.get("repo") or item.get("repository")
-                include_prereleases = cls.parse_bool(
-                    item.get("include_prereleases"), default_include_prereleases
-                )
-            else:
-                raw_repo = item
-                include_prereleases = default_include_prereleases
-
-            repo = cls.normalize_text(raw_repo).strip("/")
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            repo = cls.normalize_text(item.get("repo")).strip("/")
             if repo.startswith("https://github.com/"):
                 repo = repo.removeprefix("https://github.com/").split("/releases", 1)[0]
             if repo.count("/") != 1 or repo in seen:
                 continue
             owner, name = repo.split("/", 1)
-            if owner and name and all(part not in {".", ".."} for part in (owner, name)):
+            if (
+                owner
+                and name
+                and all(part not in {".", ".."} for part in (owner, name))
+            ):
+                include_prereleases = cls.parse_bool(
+                    item.get("include_prereleases"), False
+                )
                 result.append(
                     {
                         "repo": repo,
@@ -148,7 +139,12 @@ class ReleaseMonitorPlugin(Star):
 
     def get_state_path(self) -> Path:
         plugin_name = getattr(self, "name", "astrbot_plugin_release_monitor")
-        return Path(os.fspath(get_astrbot_data_path())) / "plugin_data" / plugin_name / self.STATE_FILENAME
+        return (
+            Path(os.fspath(get_astrbot_data_path()))
+            / "plugin_data"
+            / plugin_name
+            / self.STATE_FILENAME
+        )
 
     @staticmethod
     def read_json(path: Path) -> Dict[str, Dict[str, Any]]:
@@ -197,24 +193,37 @@ class ReleaseMonitorPlugin(Star):
         if include_prereleases:
             url = f"https://api.github.com/repos/{quote(repo, safe='/')}/releases?per_page=20"
         else:
-            url = f"https://api.github.com/repos/{quote(repo, safe='/')}/releases/latest"
+            url = (
+                f"https://api.github.com/repos/{quote(repo, safe='/')}/releases/latest"
+            )
         response = requests.get(url, headers=self._github_headers(), timeout=20)
         if response.status_code == 404:
             return None
         response.raise_for_status()
         payload = response.json()
         if isinstance(payload, list):
-            return next((item for item in payload if isinstance(item, dict) and not item.get("draft")), None)
+            return next(
+                (
+                    item
+                    for item in payload
+                    if isinstance(item, dict) and not item.get("draft")
+                ),
+                None,
+            )
         return payload if isinstance(payload, dict) else None
 
     @staticmethod
     def release_key(release: ReleaseInfo) -> str:
-        return str(release.get("id") or release.get("tag_name") or release.get("html_url"))
+        return str(
+            release.get("id") or release.get("tag_name") or release.get("html_url")
+        )
 
     @staticmethod
     def format_release_message(repo: str, release: ReleaseInfo) -> Tuple[str, str]:
         tag = release.get("tag_name") or "未知版本"
-        published = release.get("published_at") or release.get("created_at") or "未知时间"
+        published = (
+            release.get("published_at") or release.get("created_at") or "未知时间"
+        )
         if published != "未知时间":
             try:
                 published = datetime.fromisoformat(
@@ -269,9 +278,13 @@ class ReleaseMonitorPlugin(Star):
                     first_run = old_key is None
                     if is_new or (first_run and self.notify_on_first_run):
                         sent = await self.notify(repo, release)
-                        changes.append(f"{repo}: {release.get('tag_name', key)}（已发送 {sent} 个渠道）")
+                        changes.append(
+                            f"{repo}: {release.get('tag_name', key)}（已发送 {sent} 个渠道）"
+                        )
                     elif first_run:
-                        logger.info(f"首次记录 {repo} 的 Release: {release.get('tag_name', key)}")
+                        logger.info(
+                            f"首次记录 {repo} 的 Release: {release.get('tag_name', key)}"
+                        )
 
                     self.state[repo] = {
                         "release_key": key,

@@ -1,16 +1,16 @@
 # astrbot_plugin_release_monitor
 
-监控多个公开 GitHub 仓库的新 Release，并通过 Gotify 发送简短通知。
+监控多个公开 GitHub 仓库的新 Release, 并通过 Gotify 发送简短通知.
 
-通知只包含仓库、版本、发布时间和 Release 链接，不转发完整更新说明。
+通知只包含仓库、版本、发布时间和 Release 链接, 不转发完整更新说明.
 
 ## 配置
 
-- `repositories`：GitHub 仓库列表。每个仓库包含 `repo` 和 `include_prereleases`，可以分别设置是否监控预发布版本。
-- `github_token`：可选的 GitHub Token，用于提高 API 请求额度。
-- `check_interval_minutes`：检查间隔，默认 30 分钟。
-- `notify_on_first_run`：首次运行是否通知当前版本，默认关闭。
-- `gotify_channels`：Gotify 渠道列表，每个渠道包含 `name`、`url`、`token`、`priority`。
+- `repositories`：GitHub 仓库列表.每个仓库包含 `repo` 和 `include_prereleases`, 可以分别设置是否监控预发布版本.
+- `github_token`：可选的 GitHub Token, 用于提高 API 请求额度.
+- `check_interval_minutes`：检查间隔, 默认 30 分钟.
+- `notify_on_first_run`：首次运行是否通知当前版本, 默认关闭.
+- `gotify_channels`：Gotify 渠道列表, 每个渠道包含 `name`、`url`、`token`、`priority`.
 
 仓库配置示例：
 
@@ -41,4 +41,4 @@
 data/plugin_data/astrbot_plugin_release_monitor/release_state.json
 ```
 
-文件使用临时文件加原子替换写入，记录每个仓库最近处理的 Release。
+文件使用临时文件加原子替换写入, 记录每个仓库最近处理的 Release.
