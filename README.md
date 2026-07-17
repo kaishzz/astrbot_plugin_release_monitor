@@ -1,6 +1,8 @@
 # astrbot_plugin_release_monitor
 
-监控多个公开 GitHub 仓库的新 Release，并通过 Gotify 通知。
+监控多个公开 GitHub 仓库的新 Release，并通过 Gotify 发送简短通知。
+
+通知只包含仓库、版本、发布时间和 Release 链接，不转发完整更新说明。
 
 ## 配置
 

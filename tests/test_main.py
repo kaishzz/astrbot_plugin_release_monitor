@@ -92,6 +92,25 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result[0]["url"], "https://gotify.example.com")
         self.assertEqual(result[0]["priority"], 5)
 
+    def test_format_release_message_is_compact(self):
+        title, message = main.ReleaseMonitorPlugin.format_release_message(
+            "roflmuffin/CounterStrikeSharp",
+            {
+                "tag_name": "v1.0.371",
+                "published_at": "2026-07-10T09:48:21Z",
+                "body": "This long release body should not be included.",
+                "html_url": "https://github.com/roflmuffin/CounterStrikeSharp/releases/tag/v1.0.371",
+            },
+        )
+        self.assertEqual(title, "GitHub Release Update")
+        self.assertEqual(
+            message,
+            "仓库: roflmuffin/CounterStrikeSharp\n"
+            "版本: v1.0.371\n"
+            "时间: 2026-07-10 09:48:21\n"
+            "链接: https://github.com/roflmuffin/CounterStrikeSharp/releases/tag/v1.0.371",
+        )
+
     async def test_state_is_persisted_and_new_release_is_notified_once(self):
         plugin = self.make_plugin(
             repositories=["owner/repo"],

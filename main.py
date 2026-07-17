@@ -189,11 +189,17 @@ class ReleaseMonitorPlugin(Star):
     @staticmethod
     def format_release_message(repo: str, release: ReleaseInfo) -> Tuple[str, str]:
         tag = release.get("tag_name") or "未知版本"
-        title = release.get("name") or tag
         published = release.get("published_at") or release.get("created_at") or "未知时间"
+        if published != "未知时间":
+            try:
+                published = datetime.fromisoformat(
+                    str(published).replace("Z", "+00:00")
+                ).strftime("%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                published = str(published)
         url = release.get("html_url") or f"https://github.com/{repo}/releases"
-        body = release.get("body") or "（无更新说明）"
-        return f"GitHub Release: {repo} {tag}", f"{title}\n发布时间: {published}\n\n{body}\n\n{url}"
+        message = f"仓库: {repo}\n版本: {tag}\n时间: {published}\n链接: {url}"
+        return "GitHub Release Update", message
 
     def send_gotify(self, channel: Dict[str, Any], title: str, message: str) -> None:
         endpoint = f"{channel['url']}/message?token={quote(channel['token'], safe='')}"
