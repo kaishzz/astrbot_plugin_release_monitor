@@ -1,6 +1,8 @@
 import asyncio
+import importlib.util
 import json
 import os
+import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -12,15 +14,35 @@ from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star, register
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-from providers import (
-    GitHubProvider,
-    GitLabProvider,
-    RepositoryEvent,
-    RepositoryTarget,
-    normalize_text,
-    parse_bool,
-    parse_targets,
-)
+try:
+    from providers import (
+        GitHubProvider,
+        GitLabProvider,
+        RepositoryEvent,
+        RepositoryTarget,
+        normalize_text,
+        parse_bool,
+        parse_targets,
+    )
+except ModuleNotFoundError as exc:
+    if exc.name != "providers":
+        raise
+    provider_path = Path(__file__).with_name("providers.py")
+    provider_spec = importlib.util.spec_from_file_location(
+        "astrbot_plugin_release_monitor_providers", provider_path
+    )
+    if provider_spec is None or provider_spec.loader is None:
+        raise ImportError(f"无法加载平台适配器: {provider_path}") from exc
+    provider_module = importlib.util.module_from_spec(provider_spec)
+    sys.modules[provider_spec.name] = provider_module
+    provider_spec.loader.exec_module(provider_module)
+    GitHubProvider = provider_module.GitHubProvider
+    GitLabProvider = provider_module.GitLabProvider
+    RepositoryEvent = provider_module.RepositoryEvent
+    RepositoryTarget = provider_module.RepositoryTarget
+    normalize_text = provider_module.normalize_text
+    parse_bool = provider_module.parse_bool
+    parse_targets = provider_module.parse_targets
 
 EVENT_DISPLAY_NAMES = {
     "commit": "Commit",
