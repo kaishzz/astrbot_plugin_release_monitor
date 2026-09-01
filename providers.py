@@ -1,6 +1,6 @@
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Protocol
+from typing import Any, Dict, List, Optional
 from urllib.parse import quote
 
 import requests
@@ -37,28 +37,8 @@ class RepositoryEvent:
     branch: str = ""
 
 
-class RepositoryProvider(Protocol):
-    def fetch_latest_commit(
-        self, target: RepositoryTarget
-    ) -> Optional[RepositoryEvent]: ...
-
-    def fetch_latest_release(
-        self, target: RepositoryTarget, prerelease: bool
-    ) -> Optional[RepositoryEvent]: ...
-
-
 def normalize_text(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
-
-
-def parse_bool(value: Any, default: bool = False) -> bool:
-    if value is None:
-        return default
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return bool(value)
 
 
 def is_gitlab_prerelease_tag(tag: str) -> bool:
@@ -75,22 +55,10 @@ def _repository_from_value(value: Any) -> str:
     return repository.strip("/")
 
 
-def parse_target(item: Any, legacy_mode: bool = False) -> Optional[RepositoryTarget]:
-    if isinstance(item, str):
-        item = {"repo": item}
-        legacy_mode = True
-    if not isinstance(item, dict):
-        return None
-
-    raw_repository = item.get("repository", item.get("repo"))
+def parse_target(item: Dict[str, Any]) -> Optional[RepositoryTarget]:
+    raw_repository = item.get("repository")
     repository = _repository_from_value(raw_repository)
-    platform = normalize_text(item.get("platform")).lower()
-    if legacy_mode:
-        platform = "github"
-    elif not platform:
-        platform = (
-            "gitlab" if "gitlab.com/" in normalize_text(raw_repository) else "github"
-        )
+    platform = normalize_text(item.get("platform")).lower() or "github"
     if platform not in {"github", "gitlab"}:
         return None
     parts = repository.split("/")
@@ -101,51 +69,28 @@ def parse_target(item: Any, legacy_mode: bool = False) -> Optional[RepositoryTar
     if any(not part or part in {".", ".."} for part in parts):
         return None
 
-    explicit_flags = any(
-        key in item
-        for key in ("monitor_commit", "monitor_release", "monitor_prerelease")
-    )
-    if legacy_mode or (
-        not explicit_flags and ("repo" in item or "include_prereleases" in item)
-    ):
-        monitor_release = True
-        monitor_prerelease = parse_bool(item.get("include_prereleases"), False)
-    else:
-        monitor_release = parse_bool(item.get("monitor_release"), False)
-        monitor_prerelease = parse_bool(item.get("monitor_prerelease"), False)
-
     return RepositoryTarget(
         platform=platform,
         repository=repository,
         branch=normalize_text(item.get("branch")),
-        monitor_commit=parse_bool(item.get("monitor_commit"), False),
-        monitor_release=monitor_release,
-        monitor_prerelease=monitor_prerelease,
+        monitor_commit=item.get("monitor_commit", False),
+        monitor_release=item.get("monitor_release", False),
+        monitor_prerelease=item.get("monitor_prerelease", False),
     )
 
 
-def parse_targets(value: Any) -> List[RepositoryTarget]:
-    if not isinstance(value, list):
-        return []
+def parse_targets(value: list) -> List[RepositoryTarget]:
     result: List[RepositoryTarget] = []
     seen = set()
     for item in value:
-        legacy_mode = isinstance(item, str) or (
-            isinstance(item, dict)
-            and not any(
-                key in item
-                for key in ("monitor_commit", "monitor_release", "monitor_prerelease")
-            )
-            and ("repo" in item or "include_prereleases" in item)
-        )
-        target = parse_target(item, legacy_mode=legacy_mode)
+        target = parse_target(item)
         if target and target.target_key not in seen:
             result.append(target)
             seen.add(target.target_key)
     return result
 
 
-def _release_key(release: Dict[str, Any]) -> str:
+def _event_key(release: Dict[str, Any]) -> str:
     return str(
         release.get("id")
         or release.get("tag_name")
@@ -250,7 +195,7 @@ class GitHubProvider:
             return None
         return RepositoryEvent(
             event_type="prerelease" if prerelease else "release",
-            key=_release_key(release),
+            key=_event_key(release),
             title=normalize_text(release.get("name") or release.get("tag_name")),
             version=normalize_text(release.get("tag_name")),
             author=_author_name(release.get("author")),
@@ -343,7 +288,7 @@ class GitLabProvider:
         links = release.get("_links") if isinstance(release.get("_links"), dict) else {}
         return RepositoryEvent(
             event_type="prerelease" if prerelease else "release",
-            key=_release_key(release),
+            key=_event_key(release),
             title=normalize_text(release.get("name") or release.get("tag_name")),
             version=normalize_text(release.get("tag_name")),
             author=_author_name(release.get("author")),

@@ -5,16 +5,20 @@ import tempfile
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
-from providers import RepositoryEvent
+import requests
 
 DATA_ROOT = Path(tempfile.mkdtemp(prefix="release-monitor-tests-"))
+PROJECT_PARENT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(PROJECT_PARENT))
 
 
 def install_stubs():
     for name in list(sys.modules):
-        if name == "main" or name.startswith("astrbot"):
+        if name == "astrbot" or name.startswith(
+            ("astrbot.api", "astrbot.core")
+        ):
             sys.modules.pop(name, None)
     astrbot = types.ModuleType("astrbot")
     api = types.ModuleType("astrbot.api")
@@ -30,9 +34,6 @@ def install_stubs():
             return lambda *args, **kwargs: None
 
     class Event:
-        def is_admin(self):
-            return True
-
         def plain_result(self, value):
             return value
 
@@ -41,13 +42,16 @@ def install_stubs():
         def command(_name):
             return lambda func: func
 
+        @staticmethod
+        def permission_type(_permission):
+            return lambda func: func
+
+        class PermissionType:
+            ADMIN = "admin"
+
     class Star:
         def __init__(self, context):
             self.context = context
-            self.name = "astrbot_plugin_release_monitor"
-
-    def register(*args, **kwargs):
-        return lambda cls: cls
 
     api.AstrBotConfig = Config
     api.logger = Logger()
@@ -55,7 +59,6 @@ def install_stubs():
     event.filter = Filter()
     star.Context = object
     star.Star = Star
-    star.register = register
     paths.get_astrbot_data_path = lambda: DATA_ROOT
     sys.modules.update(
         {
@@ -71,24 +74,17 @@ def install_stubs():
 
 
 install_stubs()
-main = importlib.import_module("main")
+main = importlib.import_module("astrbot_plugin_release_monitor.main")
+RepositoryEvent = importlib.import_module(
+    "astrbot_plugin_release_monitor.providers"
+).RepositoryEvent
 
 
 class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
     def make_plugin(self, **config):
         return main.ReleaseMonitorPlugin(object(), config)
 
-    def test_parse_repositories_and_legacy_config(self):
-        result = main.ReleaseMonitorPlugin.parse_repositories(
-            [
-                {"repo": "owner/repo", "include_prereleases": True},
-                {
-                    "repo": "https://github.com/owner/other/releases",
-                    "include_prereleases": False,
-                },
-            ]
-        )
-        self.assertEqual(result[0]["include_prereleases"], True)
+    def test_current_config_is_parsed(self):
         plugin = self.make_plugin(
             repositories=[
                 {
@@ -101,6 +97,7 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(plugin.repositories[0].platform, "gitlab")
         self.assertTrue(plugin.repositories[0].monitor_commit)
         self.assertFalse(plugin.repositories[0].monitor_release)
+        self.assertFalse(plugin.repositories[0].monitor_prerelease)
 
     def test_format_event_message_is_compact(self):
         title, message = main.ReleaseMonitorPlugin.format_event_message(
@@ -153,6 +150,7 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
         ]
         plugin.notify_event = AsyncMock(return_value=0)
         self.assertEqual(len(await plugin.check_events()), 0)
+        plugin.notify_event.assert_not_awaited()
         events["commit"] = RepositoryEvent(
             "commit", "sha2", "Commit 2", "sha2", "a", "", "url", "main"
         )
@@ -166,11 +164,13 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(await plugin.check_events()), 0)
         self.assertEqual(plugin.notify_event.await_count, 3)
         self.assertIn("github:owner/repo", plugin.state)
-        restored = self.make_plugin(repositories=["owner/repo"])
+        restored = self.make_plugin(
+            repositories=[{"repository": "owner/repo", "monitor_release": True}]
+        )
         await restored.load_state()
         self.assertEqual(restored.state["github:owner/repo"]["release"]["key"], "r2")
 
-    async def test_first_run_can_notify_and_old_state_is_migrated(self):
+    async def test_first_run_can_notify_and_current_state_is_loaded(self):
         plugin = self.make_plugin(
             repositories=[{"repository": "owner/repo", "monitor_release": True}],
             notify_on_first_run=True,
@@ -183,21 +183,23 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(await plugin.check_events()), 1)
         plugin.notify_event.assert_awaited_once()
 
-        old_path = plugin.get_state_path()
+        state_path = plugin.get_state_path()
         plugin.write_json(
-            old_path,
+            state_path,
             {
-                "owner/old": {
-                    "release_key": "old-key",
-                    "tag_name": "v0",
-                    "html_url": "old-url",
+                "github:owner/old": {
+                    "release": {
+                        "key": "old-key",
+                        "version": "v0",
+                        "checked_at": "2026-01-01T00:00:00+00:00",
+                    }
                 }
             },
         )
-        migrated = self.make_plugin()
-        await migrated.load_state()
+        restored = self.make_plugin()
+        await restored.load_state()
         self.assertEqual(
-            migrated.state["github:owner/old"]["release"]["key"], "old-key"
+            restored.state["github:owner/old"]["release"]["version"], "v0"
         )
 
     async def test_initialize_schedules_initial_check_in_background(self):
@@ -229,20 +231,19 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
         )
         plugin.state["github:owner/repo"] = {"commit": {"version": "abcdef123456"}}
         plugin.last_check_at = "2026-01-01T00:00:00+00:00"
-        listed = await anext(
-            plugin.release_list(
-                types.SimpleNamespace(is_admin=lambda: True, plain_result=lambda x: x)
-            )
-        )
-        status = await anext(
-            plugin.release_status(
-                types.SimpleNamespace(is_admin=lambda: True, plain_result=lambda x: x)
-            )
-        )
+        event = types.SimpleNamespace(plain_result=lambda x: x)
+        listed = await anext(plugin.release_list(event))
+        status = await anext(plugin.release_status(event))
         self.assertIn("github:owner/repo", listed)
         self.assertIn("[main]", listed)
         self.assertIn("Commit", listed)
         self.assertIn("abcdef123456", listed)
+        self.assertIn("gitlab:group/project", listed)
+        plugin.state["gitlab:group/project"] = {
+            "release": {"version": "v1.2.0"}
+        }
+        listed = await anext(plugin.release_list(event))
+        self.assertIn("v1.2.0", listed)
         self.assertIn("GitLab 仓库: 1", status)
         self.assertIn("Commit 监控: 1", status)
         self.assertIn("仓库数量: 2", status)
@@ -252,21 +253,14 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Gotify 渠道: 0", status)
         self.assertIn("最后检查: 2026-01-01T00:00:00+00:00", status)
 
-    async def test_commands_reject_non_admin(self):
-        plugin = self.make_plugin()
-        event = types.SimpleNamespace(is_admin=lambda: False, plain_result=lambda x: x)
-        self.assertEqual(await anext(plugin.release_check(event)), "仅管理员可用")
-        self.assertEqual(await anext(plugin.release_list(event)), "仅管理员可用")
-        self.assertEqual(await anext(plugin.release_status(event)), "仅管理员可用")
-
     async def test_no_enabled_events_make_no_provider_request(self):
         plugin = self.make_plugin(repositories=[{"repository": "owner/repo"}])
         provider = plugin.providers["github"]
-        provider.fetch_latest_commit = AsyncMock()
-        provider.fetch_latest_release = AsyncMock()
+        provider.fetch_latest_commit = Mock()
+        provider.fetch_latest_release = Mock()
         self.assertEqual(await plugin.check_events(), [])
-        provider.fetch_latest_commit.assert_not_awaited()
-        provider.fetch_latest_release.assert_not_awaited()
+        provider.fetch_latest_commit.assert_not_called()
+        provider.fetch_latest_release.assert_not_called()
 
     async def test_initialize_does_not_start_when_all_events_disabled(self):
         plugin = self.make_plugin(repositories=[{"repository": "owner/repo"}])
@@ -304,7 +298,7 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
         )
         plugin.providers["github"].fetch_latest_commit = lambda target: (
             _ for _ in ()
-        ).throw(RuntimeError("failed"))
+        ).throw(requests.RequestException("failed"))
         plugin.providers["github"].fetch_latest_release = lambda target, prerelease: (
             RepositoryEvent("release", "r", "Release", "v1", "a", "", "url")
         )
@@ -344,7 +338,7 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
         )
         good = RepositoryEvent("commit", "sha", "Commit", "sha", "a", "", "url", "main")
         plugin.providers["github"].fetch_latest_commit = lambda target: (
-            (_ for _ in ()).throw(RuntimeError("failed"))
+            (_ for _ in ()).throw(requests.RequestException("failed"))
             if target.repository == "owner/disabled"
             else good
         )

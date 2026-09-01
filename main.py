@@ -1,8 +1,6 @@
 import asyncio
-import importlib.util
 import json
 import os
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -11,38 +9,17 @@ from urllib.parse import quote
 import requests
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-try:
-    from providers import (
-        GitHubProvider,
-        GitLabProvider,
-        RepositoryEvent,
-        RepositoryTarget,
-        normalize_text,
-        parse_bool,
-        parse_targets,
-    )
-except ModuleNotFoundError as exc:
-    if exc.name != "providers":
-        raise
-    provider_path = Path(__file__).with_name("providers.py")
-    provider_spec = importlib.util.spec_from_file_location(
-        "astrbot_plugin_release_monitor_providers", provider_path
-    )
-    if provider_spec is None or provider_spec.loader is None:
-        raise ImportError(f"无法加载平台适配器: {provider_path}") from exc
-    provider_module = importlib.util.module_from_spec(provider_spec)
-    sys.modules[provider_spec.name] = provider_module
-    provider_spec.loader.exec_module(provider_module)
-    GitHubProvider = provider_module.GitHubProvider
-    GitLabProvider = provider_module.GitLabProvider
-    RepositoryEvent = provider_module.RepositoryEvent
-    RepositoryTarget = provider_module.RepositoryTarget
-    normalize_text = provider_module.normalize_text
-    parse_bool = provider_module.parse_bool
-    parse_targets = provider_module.parse_targets
+from .providers import (
+    GitHubProvider,
+    GitLabProvider,
+    RepositoryEvent,
+    RepositoryTarget,
+    normalize_text,
+    parse_targets,
+)
 
 EVENT_DISPLAY_NAMES = {
     "commit": "Commit",
@@ -51,27 +28,20 @@ EVENT_DISPLAY_NAMES = {
 }
 
 
-@register(
-    "astrbot_plugin_release_monitor",
-    "kaish",
-    "监控 GitHub 仓库 Release, 并通过 Gotify 通知",
-    "1.1",
-)
 class ReleaseMonitorPlugin(Star):
     STATE_FILENAME = "release_state.json"
     DEFAULT_INTERVAL_MINUTES = 30
 
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
-        self.config = config
         self.repositories: List[RepositoryTarget] = parse_targets(
             config.get("repositories", [])
         )
         self.github_token = normalize_text(config.get("github_token"))
-        self.interval_minutes = self.read_int(
-            "check_interval_minutes", self.DEFAULT_INTERVAL_MINUTES, minimum=1
+        self.interval_minutes = config.get(
+            "check_interval_minutes", self.DEFAULT_INTERVAL_MINUTES
         )
-        self.notify_on_first_run = self.read_bool("notify_on_first_run", False)
+        self.notify_on_first_run = config.get("notify_on_first_run", False)
         self.gotify_channels = self.parse_gotify_channels(
             config.get("gotify_channels", [])
         )
@@ -80,7 +50,6 @@ class ReleaseMonitorPlugin(Star):
         self.check_lock = asyncio.Lock()
         self.monitor_task: Optional[asyncio.Task] = None
         self.last_check_at: Optional[str] = None
-        self.last_notification_counts: Dict[str, int] = {}
         self.last_change_records: List[
             Tuple[RepositoryTarget, RepositoryEvent, int]
         ] = []
@@ -89,75 +58,37 @@ class ReleaseMonitorPlugin(Star):
             "gitlab": GitLabProvider(),
         }
 
-    @classmethod
-    def parse_repositories(cls, value: Any) -> List[Dict[str, Any]]:
-        return [
-            {
-                "repo": target.repository,
-                "include_prereleases": target.monitor_prerelease,
-            }
-            for target in parse_targets(value)
-        ]
-
-    @classmethod
-    def parse_gotify_channels(cls, value: Any) -> List[Dict[str, Any]]:
-        if isinstance(value, str):
-            try:
-                value = json.loads(value)
-            except json.JSONDecodeError:
-                return []
-        if isinstance(value, dict):
-            value = [value]
-        if not isinstance(value, list):
-            return []
-
+    @staticmethod
+    def parse_gotify_channels(value: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         channels = []
         for index, raw in enumerate(value, start=1):
-            if not isinstance(raw, dict):
-                continue
             url = normalize_text(raw.get("url")).rstrip("/")
             token = normalize_text(raw.get("token"))
             if not url or not token or not url.startswith(("http://", "https://")):
                 logger.warning(f"Gotify 渠道 {index} 配置不完整, 已跳过")
                 continue
-            try:
-                priority = int(raw.get("priority", 5))
-            except (TypeError, ValueError):
-                priority = 5
             channels.append(
                 {
                     "name": normalize_text(raw.get("name")) or f"Gotify {index}",
                     "url": url,
                     "token": token,
-                    "priority": max(0, priority),
+                    "priority": max(0, raw.get("priority", 5)),
                 }
             )
         return channels
 
-    def read_int(self, key: str, default: int, minimum: int) -> int:
-        try:
-            value = int(self.config.get(key, default))
-        except (TypeError, ValueError):
-            return default
-        return max(minimum, value)
-
-    def read_bool(self, key: str, default: bool) -> bool:
-        return parse_bool(self.config.get(key, default), default)
-
     def get_state_path(self) -> Path:
-        plugin_name = getattr(self, "name", "astrbot_plugin_release_monitor")
         return (
             Path(os.fspath(get_astrbot_data_path()))
             / "plugin_data"
-            / plugin_name
+            / "astrbot_plugin_release_monitor"
             / self.STATE_FILENAME
         )
 
     @staticmethod
     def read_json(path: Path) -> Dict[str, Dict[str, Any]]:
         with path.open("r", encoding="utf-8") as file:
-            data = json.load(file)
-        return data if isinstance(data, dict) else {}
+            return json.load(file)
 
     @staticmethod
     def write_json(path: Path, data: Dict[str, Dict[str, Any]]) -> None:
@@ -178,23 +109,8 @@ class ReleaseMonitorPlugin(Star):
             return
         try:
             data = await asyncio.to_thread(self.read_json, path)
-            migrated: Dict[str, Dict[str, Any]] = {}
-            for key, value in data.items():
-                if not isinstance(value, dict):
-                    continue
-                if "release_key" in value:
-                    target_key = key if ":" in key else f"github:{key}"
-                    migrated[target_key] = {
-                        "release": {
-                            "key": value.get("release_key"),
-                            "tag_name": value.get("tag_name"),
-                            "checked_at": value.get("checked_at"),
-                        }
-                    }
-                else:
-                    migrated[key] = value
             async with self.state_lock:
-                self.state = migrated
+                self.state = data
         except (OSError, json.JSONDecodeError) as exc:
             logger.error(f"读取 Release 持久化文件失败: {path}, {exc}")
 
@@ -248,14 +164,11 @@ class ReleaseMonitorPlugin(Star):
                 success_count += 1
             except requests.RequestException as exc:
                 logger.error(f"发送 Gotify 通知失败 [{channel['name']}]: {exc}")
-            except Exception as exc:
-                logger.error(f"发送 Gotify 通知异常 [{channel['name']}]: {exc}")
         return success_count
 
     async def check_events(self) -> List[RepositoryEvent]:
         async with self.check_lock:
             changes: List[RepositoryEvent] = []
-            self.last_notification_counts = {}
             self.last_change_records = []
             for target in self.repositories:
                 if not any(
@@ -307,31 +220,23 @@ class ReleaseMonitorPlugin(Star):
                             sent = await self.notify_event(target, event)
                             changes.append(event)
                             self.last_change_records.append((target, event, sent))
-                            self.last_notification_counts[
-                                f"{target.target_key}:{event.event_type}"
-                            ] = sent
                         elif first_run:
                             logger.info(
                                 f"首次记录 {target.target_key} 的 {event_type}: {event.key}"
                             )
                         state_item = {
                             "key": event.key,
+                            "version": event.version,
                             "checked_at": datetime.now(timezone.utc).isoformat(),
                         }
                         if event.event_type == "commit":
                             state_item["title"] = event.title
-                        else:
-                            state_item["tag_name"] = event.version
                         self.state.setdefault(target.target_key, {})[event_type] = (
                             state_item
                         )
                     except requests.RequestException as exc:
                         logger.error(
                             f"检查 {target.platform} {event_type} 失败 [{target.repository}]: {exc}"
-                        )
-                    except Exception as exc:
-                        logger.error(
-                            f"检查 {target.platform} {event_type} 异常 [{target.repository}]: {exc}"
                         )
 
             self.last_check_at = datetime.now(timezone.utc).isoformat()
@@ -351,15 +256,9 @@ class ReleaseMonitorPlugin(Star):
         ]
 
     async def monitor_loop(self) -> None:
-        try:
-            while True:
-                try:
-                    await self.check_releases()
-                except Exception as exc:
-                    logger.error(f"Release 定时监控检查异常: {exc}")
-                await asyncio.sleep(self.interval_minutes * 60)
-        except asyncio.CancelledError:
-            raise
+        while True:
+            await self.check_releases()
+            await asyncio.sleep(self.interval_minutes * 60)
 
     async def initialize(self):
         await self.load_state()
@@ -377,22 +276,18 @@ class ReleaseMonitorPlugin(Star):
             f"检查间隔 {self.interval_minutes} 分钟"
         )
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("release_check")
     async def release_check(self, event: AstrMessageEvent):
-        if not event.is_admin():
-            yield event.plain_result("仅管理员可用")
-            return
         changes = await self.check_releases()
         if changes:
             yield event.plain_result("发现新事件:\n" + "\n".join(changes))
         else:
             yield event.plain_result("检查完成, 暂无新事件")
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("release_list")
     async def release_list(self, event: AstrMessageEvent):
-        if not event.is_admin():
-            yield event.plain_result("仅管理员可用")
-            return
         if not self.repositories:
             yield event.plain_result("当前没有配置监控仓库")
             return
@@ -415,20 +310,13 @@ class ReleaseMonitorPlugin(Star):
                 if display_name not in enabled:
                     continue
                 item = self.state.get(target.target_key, {}).get(event_type, {})
-                if event_type == "commit":
-                    value = (
-                        item.get("version") or item.get("key", "")[:12] or "尚未检查"
-                    )
-                else:
-                    value = item.get("tag_name") or item.get("key") or "尚未检查"
+                value = item.get("version") or item.get("key", "")[:12] or "尚未检查"
                 lines.append(f"  {event_type}: {value}")
         yield event.plain_result("\n".join(lines))
 
+    @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("release_status")
     async def release_status(self, event: AstrMessageEvent):
-        if not event.is_admin():
-            yield event.plain_result("仅管理员可用")
-            return
         checked = self.last_check_at or "尚未检查"
         running = self.monitor_task and not self.monitor_task.done()
         github_count = sum(target.platform == "github" for target in self.repositories)

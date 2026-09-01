@@ -1,7 +1,11 @@
 import unittest
+import sys
+from pathlib import Path
 from unittest.mock import Mock, patch
 
-from providers import (
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from astrbot_plugin_release_monitor.providers import (
     GitHubProvider,
     GitLabProvider,
     RepositoryTarget,
@@ -19,7 +23,7 @@ def response(payload, status=200):
 
 
 class ProviderTests(unittest.TestCase):
-    def test_parse_targets_and_legacy_mapping(self):
+    def test_parse_current_targets(self):
         targets = parse_targets(
             [
                 {"repository": "owner/repo", "monitor_commit": True},
@@ -28,19 +32,27 @@ class ProviderTests(unittest.TestCase):
                     "repository": "https://gitlab.com/group/project",
                     "monitor_release": True,
                 },
-                {"repo": "legacy/repo", "include_prereleases": True},
-                {"repo": "legacy/stable"},
-                {"repo": "legacy/string-false", "include_prereleases": "false"},
+                {
+                    "platform": "github",
+                    "repository": "https://github.com/owner/url/releases",
+                    "monitor_release": True,
+                    "monitor_prerelease": True,
+                },
             ]
         )
+        self.assertEqual(len(targets), 3)
+        self.assertEqual(targets[0].target_key, "github:owner/repo")
         self.assertEqual(targets[1].target_key, "gitlab:group/project")
         self.assertFalse(targets[0].monitor_release)
         self.assertTrue(targets[2].monitor_release)
         self.assertTrue(targets[2].monitor_prerelease)
-        self.assertTrue(targets[3].monitor_release)
-        self.assertFalse(targets[3].monitor_prerelease)
-        self.assertTrue(targets[4].monitor_release)
-        self.assertFalse(targets[4].monitor_prerelease)
+
+    def test_targets_without_explicit_events_are_disabled(self):
+        targets = parse_targets([{"repository": "owner/repo"}])
+        self.assertEqual(len(targets), 1)
+        self.assertFalse(targets[0].monitor_commit)
+        self.assertFalse(targets[0].monitor_release)
+        self.assertFalse(targets[0].monitor_prerelease)
 
     def test_invalid_and_duplicate_targets_are_ignored(self):
         targets = parse_targets(
@@ -69,7 +81,7 @@ class ProviderTests(unittest.TestCase):
         self.assertFalse(is_gitlab_prerelease_tag("v1.2.3.rc"))
         self.assertFalse(is_gitlab_prerelease_tag("v1.2.3-rc-1"))
 
-    @patch("providers.requests.get")
+    @patch("astrbot_plugin_release_monitor.providers.requests.get")
     def test_default_branch_is_resolved_from_platform(self, get):
         get.side_effect = [
             response({"default_branch": "trunk"}),
@@ -83,7 +95,7 @@ class ProviderTests(unittest.TestCase):
             get.call_args_list[1].kwargs["params"], {"per_page": 1, "sha": "trunk"}
         )
 
-    @patch("providers.requests.get")
+    @patch("astrbot_plugin_release_monitor.providers.requests.get")
     def test_github_commit_and_release_conversion(self, get):
         provider = GitHubProvider("token")
         target = RepositoryTarget("github", "owner/repo", "main")
@@ -143,7 +155,7 @@ class ProviderTests(unittest.TestCase):
             "api.github.com/repos/owner/repo/releases", get.call_args_list[1].args[0]
         )
 
-    @patch("providers.requests.get")
+    @patch("astrbot_plugin_release_monitor.providers.requests.get")
     def test_gitlab_commit_release_and_upcoming_filter(self, get):
         provider = GitLabProvider()
         target = RepositoryTarget("gitlab", "group/project", "main")
@@ -189,7 +201,7 @@ class ProviderTests(unittest.TestCase):
         )
         self.assertEqual(provider.fetch_latest_release(target, False).version, "v4.0.0")
 
-    @patch("providers.requests.get")
+    @patch("astrbot_plugin_release_monitor.providers.requests.get")
     def test_gitlab_default_branch_and_encoded_project_path(self, get):
         get.side_effect = [
             response({"default_branch": "trunk"}),
@@ -204,7 +216,7 @@ class ProviderTests(unittest.TestCase):
         self.assertEqual(event.branch, "trunk")
         self.assertIn("projects/group%2Fsub%2Fproject", get.call_args_list[0].args[0])
 
-    @patch("providers.requests.get")
+    @patch("astrbot_plugin_release_monitor.providers.requests.get")
     def test_http_errors_and_404(self, get):
         provider = GitHubProvider()
         target = RepositoryTarget("github", "owner/repo")
@@ -215,7 +227,7 @@ class ProviderTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             provider.fetch_latest_commit(target)
 
-    @patch("providers.requests.get")
+    @patch("astrbot_plugin_release_monitor.providers.requests.get")
     def test_empty_commit_response_returns_none(self, get):
         get.return_value = response([])
         self.assertIsNone(
@@ -224,7 +236,7 @@ class ProviderTests(unittest.TestCase):
             )
         )
 
-    @patch("providers.requests.get")
+    @patch("astrbot_plugin_release_monitor.providers.requests.get")
     def test_gitlab_404_returns_none(self, get):
         get.return_value = response(None, 404)
         self.assertIsNone(

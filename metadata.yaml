@@ -1,6 +1,7 @@
 name: astrbot_plugin_release_monitor
-display_name: GitHub Release 监控
-desc: 监控 GitHub 仓库 Release, 并通过 Gotify 通知
-version: v1.1
+display_name: GitHub/GitLab 仓库事件监控
+desc: 监控 GitHub.com/GitLab.com 公开仓库的 Commit、Release、Pre-release, 并通过 Gotify 通知
+version: v1.2
 author: kaish
 repo: https://github.com/kaishzz/astrbot_plugin_release_monitor
+astrbot_version: ">=4.27.4,<5"
