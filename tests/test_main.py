@@ -160,7 +160,11 @@ class ReleaseMonitorTests(unittest.IsolatedAsyncioTestCase):
         events["prerelease"] = RepositoryEvent(
             "prerelease", "p2", "Pre 2", "v3-rc.1", "a", "", "url"
         )
-        self.assertEqual(len(await plugin.check_events()), 3)
+        changes = await plugin.check_events()
+        self.assertEqual(len(changes), 3)
+        self.assertEqual(
+            changes[0], (plugin.repositories[0], events["commit"], 0)
+        )
         self.assertEqual(len(await plugin.check_events()), 0)
         self.assertEqual(plugin.notify_event.await_count, 3)
         self.assertIn("github:owner/repo", plugin.state)

@@ -46,13 +46,9 @@ class ReleaseMonitorPlugin(Star):
             config.get("gotify_channels", [])
         )
         self.state: Dict[str, Dict[str, Any]] = {}
-        self.state_lock = asyncio.Lock()
         self.check_lock = asyncio.Lock()
         self.monitor_task: Optional[asyncio.Task] = None
         self.last_check_at: Optional[str] = None
-        self.last_change_records: List[
-            Tuple[RepositoryTarget, RepositoryEvent, int]
-        ] = []
         self.providers = {
             "github": GitHubProvider(self.github_token),
             "gitlab": GitLabProvider(),
@@ -109,15 +105,12 @@ class ReleaseMonitorPlugin(Star):
             return
         try:
             data = await asyncio.to_thread(self.read_json, path)
-            async with self.state_lock:
-                self.state = data
+            self.state = data
         except (OSError, json.JSONDecodeError) as exc:
             logger.error(f"读取 Release 持久化文件失败: {path}, {exc}")
 
     async def save_state(self) -> None:
-        async with self.state_lock:
-            snapshot = dict(self.state)
-        await asyncio.to_thread(self.write_json, self.get_state_path(), snapshot)
+        await asyncio.to_thread(self.write_json, self.get_state_path(), self.state)
 
     @staticmethod
     def format_event_message(
@@ -166,10 +159,11 @@ class ReleaseMonitorPlugin(Star):
                 logger.error(f"发送 Gotify 通知失败 [{channel['name']}]: {exc}")
         return success_count
 
-    async def check_events(self) -> List[RepositoryEvent]:
+    async def check_events(
+        self,
+    ) -> List[Tuple[RepositoryTarget, RepositoryEvent, int]]:
         async with self.check_lock:
-            changes: List[RepositoryEvent] = []
-            self.last_change_records = []
+            changes: List[Tuple[RepositoryTarget, RepositoryEvent, int]] = []
             for target in self.repositories:
                 if not any(
                     (
@@ -218,8 +212,7 @@ class ReleaseMonitorPlugin(Star):
                             not first_run or self.notify_on_first_run
                         ):
                             sent = await self.notify_event(target, event)
-                            changes.append(event)
-                            self.last_change_records.append((target, event, sent))
+                            changes.append((target, event, sent))
                         elif first_run:
                             logger.info(
                                 f"首次记录 {target.target_key} 的 {event_type}: {event.key}"
@@ -247,12 +240,12 @@ class ReleaseMonitorPlugin(Star):
             return changes
 
     async def check_releases(self) -> List[str]:
-        await self.check_events()
+        changes = await self.check_events()
         return [
             f"{target.platform}:{target.repository} {event.event_type} "
             f"{event.version or event.key[:12]} (已发送 "
             f"{sent} 个渠道)"
-            for target, event, sent in self.last_change_records
+            for target, event, sent in changes
         ]
 
     async def monitor_loop(self) -> None:
